@@ -3,11 +3,14 @@ package up
 import (
 	"fmt"
 	"io"
+	"os"
+	"path"
 
 	"github.com/mfojtik/cluster-up/pkg/api"
 	"github.com/mfojtik/cluster-up/pkg/container"
 	"github.com/mfojtik/cluster-up/pkg/log"
 	"github.com/mfojtik/cluster-up/pkg/preflight"
+	"github.com/mfojtik/cluster-up/pkg/util/dir"
 	"github.com/mfojtik/cluster-up/pkg/util/template"
 	"github.com/spf13/cobra"
 )
@@ -45,6 +48,7 @@ type ClusterUpOptions struct {
 	SkipRegistryCheck bool
 
 	BaseDir           string
+	SpecifiedBaseDir  bool
 	UseExistingConfig bool
 	WriteConfig       bool
 
@@ -57,12 +61,19 @@ type ClusterUpOptions struct {
 	NoProxy               []string
 
 	clusterConfig *api.ClusterConfig
+	dockerClient  container.Client
 }
 
 func NewClusterUpCommand(recommendedName, parentName string, out, errOut io.Writer) *cobra.Command {
 	c := &ClusterUpOptions{}
 	c.Output = out
 	c.ErrOutput = errOut
+
+	client, err := container.NewDockerClient()
+	if err != nil {
+		log.Fatal(err)
+	}
+	c.dockerClient = client
 
 	cmd := &cobra.Command{
 		Use:     recommendedName,
@@ -118,18 +129,36 @@ func NewClusterUpCommand(recommendedName, parentName string, out, errOut io.Writ
 }
 
 func (c *ClusterUpOptions) Validate() error {
-	client, err := container.NewDockerClient()
-	if err != nil {
-		return err
-	}
-	validator := preflight.NewValidator(client)
-	if err := validator.Validate(); err != nil {
+
+	if err := preflight.NewValidator(c.dockerClient).Validate(); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (c *ClusterUpOptions) Complete() error {
+	if len(c.BaseDir) == 0 {
+		c.SpecifiedBaseDir = false
+		c.BaseDir = dir.InOpenShiftLocal("cluster-up")
+	}
+	if !path.IsAbs(c.BaseDir) {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		absHostDir, err := dir.MakeAbs(c.BaseDir, cwd)
+		if err != nil {
+			return err
+		}
+		c.BaseDir = absHostDir
+	}
+
+	canUseNSenterMounter, err := container.CanUseNSenterMounter(c.dockerClient)
+	if err != nil {
+		return err
+	}
+	log.Infof("canUseNSenterMounter=%t", canUseNSenterMounter)
+
 	// 1. Pull images
 	// 2. Determine cluster IP and additional IP
 	// 3. Set the proxy

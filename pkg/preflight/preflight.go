@@ -14,7 +14,7 @@ func NewValidator(client container.Client) Validator {
 	ctx := validatorContext{
 		containerClient: client,
 	}
-	chain := &containerValidator{}
+	chain := &validator{}
 	// Define Docker validation checks
 	chain.Add(&DockerVersion{ctx})
 	chain.Add(&DockerRegistry{ctx})

@@ -16,20 +16,20 @@ func (c *validatorContext) ContainerClient() container.Client {
 	return c.containerClient
 }
 
-type containerValidator struct {
+type validator struct {
 	validators []Validator
 }
 
-func (c *containerValidator) Add(v Validator) *containerValidator {
+func (c *validator) Add(v Validator) *validator {
 	c.validators = append(c.validators, v)
 	return c
 }
 
-func (c *containerValidator) Message() string {
+func (c *validator) Message() string {
 	return "Performing pre-flight checks"
 }
 
-func (c *containerValidator) Validate() error {
+func (c *validator) Validate() error {
 	var (
 		errCount    int
 		errMessages []string
