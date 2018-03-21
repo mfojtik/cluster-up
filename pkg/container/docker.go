@@ -25,6 +25,7 @@ type Client interface {
 	ContainerStart(containerID string, options types.ContainerStartOptions) error
 	ContainerWait(containerID string, condition container.WaitCondition) (<-chan container.ContainerWaitOKBody, <-chan error)
 	ContainerAttach(container string, options types.ContainerAttachOptions) (types.HijackedResponse, error)
+	ContainerKill(containerID, signal string) error
 }
 
 func NewDockerClient() (Client, error) {
@@ -42,6 +43,12 @@ func NewDockerClient() (Client, error) {
 // their own context package...
 type internalDocker struct {
 	client *client.Client
+}
+
+func (d *internalDocker) ContainerKill(containerID, signal string) error {
+	ctx, cancelFn := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancelFn()
+	return d.client.ContainerKill(ctx, containerID, signal)
 }
 
 func (d *internalDocker) ContainerAttach(container string, options types.ContainerAttachOptions) (types.HijackedResponse, error) {

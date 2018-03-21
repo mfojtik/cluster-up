@@ -2,6 +2,7 @@ package container
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -15,6 +16,8 @@ import (
 	"github.com/mfojtik/cluster-up/pkg/log"
 )
 
+type HookFn func() error
+
 type Runner interface {
 	RemoveWhenExit() Runner
 	Privileged() Runner
@@ -24,6 +27,7 @@ type Runner interface {
 	Entrypoint(cmd ...string) Runner
 	Command(cmd ...string) Runner
 	WithRootFS() Runner
+	AfterStartHook(fn HookFn) Runner
 
 	RunImageWithName(image, name string) Runner
 	Error() error
@@ -36,10 +40,11 @@ type runner struct {
 	hostConfig *container.HostConfig
 	config     *container.Config
 
-	err         error
-	containerID string
-	output      []byte
-	baseDir     string
+	afterStartHook HookFn
+	err            error
+	containerID    string
+	output         []byte
+	baseDir        string
 }
 
 func NewRunner(c Client, baseDir string) Runner {
@@ -49,6 +54,10 @@ func NewRunner(c Client, baseDir string) Runner {
 		hostConfig: &container.HostConfig{},
 		config:     &container.Config{},
 	}
+}
+func (r *runner) AfterStartHook(fn HookFn) Runner {
+	r.afterStartHook = fn
+	return r
 }
 
 func (r *runner) RemoveWhenExit() Runner {
@@ -141,6 +150,11 @@ func (r *runner) RunImageWithName(image, name string) Runner {
 		r.err = log.Error(fmt.Sprintf("failed to start container %q", name), err)
 		return r
 	}
+	if r.afterStartHook != nil {
+		if err := r.afterStartHook(); err != nil {
+			r.err = log.Error("after start hook", err)
+		}
+	}
 	defer r.storeContainerLog(name)
 	waitC, errC := r.client.ContainerWait(response.ID, container.WaitConditionRemoved)
 	select {
@@ -161,10 +175,17 @@ func (r *runner) Error() error {
 }
 
 func (r *runner) CombinedOutput() []byte {
-	return r.output
+	// Docker snowflake. For some reason the first bytes always contain this garbage,
+	garbagePrefix := []byte{0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x19}
+	filteredOut := bytes.TrimSpace(r.output)
+	filteredOut = bytes.TrimPrefix(filteredOut, garbagePrefix)
+	return filteredOut
 }
 
 func (r *runner) storeContainerLog(name string) error {
+	if len(r.baseDir) == 0 {
+		return nil
+	}
 	if len(r.output) == 0 {
 		return nil
 	}

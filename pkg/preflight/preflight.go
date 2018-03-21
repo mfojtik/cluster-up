@@ -10,16 +10,23 @@ type Validator interface {
 	Validate() error
 }
 
-func NewValidator(client container.Client) Validator {
+func NewValidator(client container.Client, portForward, skipRegistryCheck bool) Validator {
 	ctx := validatorContext{
 		containerClient: client,
 	}
 	chain := &validator{}
 	// Define Docker validation checks
 	chain.Add(&DockerVersion{ctx})
-	chain.Add(&DockerRegistry{ctx})
+
+	if !skipRegistryCheck {
+		chain.Add(&DockerRegistry{ctx})
+	}
 
 	// OpenShift pre-flight checks
 	chain.Add(&OpenShiftRunning{ctx})
+
+	if portForward {
+		chain.Add(&Socat{})
+	}
 	return chain
 }

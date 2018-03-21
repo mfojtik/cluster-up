@@ -22,6 +22,9 @@ var (
 	// ImageTag is the image tag to use to run cluster.
 	// This is mutated by CLI --tag argument, the default is what the 'oc' executable version is.
 	ImageTag = "latest"
+
+	// FIXME: This should come from the registry install component
+	RegistryServiceClusterIP = "172.30.1.1"
 )
 
 // TODO: tbd
