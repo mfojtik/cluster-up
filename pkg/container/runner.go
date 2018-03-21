@@ -4,6 +4,9 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"io/ioutil"
+	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -20,6 +23,7 @@ type Runner interface {
 	Bind(binds ...string) Runner
 	Entrypoint(cmd ...string) Runner
 	Command(cmd ...string) Runner
+	WithRootFS() Runner
 
 	RunImageWithName(image, name string) Runner
 	Error() error
@@ -35,11 +39,13 @@ type runner struct {
 	err         error
 	containerID string
 	output      []byte
+	baseDir     string
 }
 
-func NewRunner(c Client) Runner {
+func NewRunner(c Client, baseDir string) Runner {
 	return &runner{
 		client:     c,
+		baseDir:    baseDir,
 		hostConfig: &container.HostConfig{},
 		config:     &container.Config{},
 	}
@@ -88,6 +94,11 @@ func (r *runner) Command(cmd ...string) Runner {
 	return r
 }
 
+func (r *runner) WithRootFS() Runner {
+	r.hostConfig.Binds = append(r.hostConfig.Binds, "/:/rootfs:ro")
+	return r
+}
+
 func (r *runner) RunImageWithName(image, name string) Runner {
 	r.config.Image = image
 	response, err := r.client.ContainerCreate(r.config, r.hostConfig, nil, name)
@@ -130,6 +141,7 @@ func (r *runner) RunImageWithName(image, name string) Runner {
 		r.err = log.Error(fmt.Sprintf("failed to start container %q", name), err)
 		return r
 	}
+	defer r.storeContainerLog(name)
 	waitC, errC := r.client.ContainerWait(response.ID, container.WaitConditionRemoved)
 	select {
 	case err := <-errC:
@@ -150,4 +162,17 @@ func (r *runner) Error() error {
 
 func (r *runner) CombinedOutput() []byte {
 	return r.output
+}
+
+func (r *runner) storeContainerLog(name string) error {
+	if len(r.output) == 0 {
+		return nil
+	}
+	logDir := path.Join(r.baseDir, "logs")
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		return err
+	}
+	filename := path.Join(logDir, fmt.Sprintf("%s.log", name))
+	log.Debugf("Writing container log to %q", filename)
+	return ioutil.WriteFile(filename, r.output, 0755)
 }

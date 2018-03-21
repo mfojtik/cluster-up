@@ -3,14 +3,11 @@ package up
 import (
 	"fmt"
 	"io"
-	"os"
-	"path"
 
 	"github.com/mfojtik/cluster-up/pkg/api"
 	"github.com/mfojtik/cluster-up/pkg/container"
 	"github.com/mfojtik/cluster-up/pkg/log"
 	"github.com/mfojtik/cluster-up/pkg/preflight"
-	"github.com/mfojtik/cluster-up/pkg/util/dir"
 	"github.com/mfojtik/cluster-up/pkg/util/template"
 	"github.com/spf13/cobra"
 )
@@ -38,9 +35,6 @@ var upExample = template.Examples(`
 type ClusterUpOptions struct {
 	Output    io.Writer
 	ErrOutput io.Writer
-
-	ImageTag    string
-	ImagePrefix string
 
 	PublicHostname string
 	RoutingSuffix  string
@@ -94,8 +88,8 @@ func NewClusterUpCommand(recommendedName, parentName string, out, errOut io.Writ
 	}
 
 	flags := cmd.Flags()
-	flags.StringVar(&c.ImageTag, "tag", "", "Specify the tag for OpenShift images")
-	flags.StringVar(&c.ImagePrefix, "image", api.DefaultImagePrefix, "Specify the images to use for OpenShift")
+	flags.StringVar(&api.ImageTag, "tag", api.DetermineImageTag(), "Specify the tag for OpenShift images")
+	flags.StringVar(&api.DefaultImagePrefix, "image", api.DefaultImagePrefix, "Specify the images to use for OpenShift")
 	flags.BoolVar(&c.SkipRegistryCheck, "skip-registry-check", false, "Skip Docker daemon registry check")
 	flags.StringVar(&c.PublicHostname, "public-hostname", "", "Public hostname for OpenShift cluster")
 	flags.StringVar(&c.RoutingSuffix, "routing-suffix", "", "Default suffix for server routes")
@@ -137,27 +131,12 @@ func (c *ClusterUpOptions) Validate() error {
 }
 
 func (c *ClusterUpOptions) Complete() error {
-	if len(c.BaseDir) == 0 {
-		c.SpecifiedBaseDir = false
-		c.BaseDir = dir.InOpenShiftLocal("cluster-up")
-	}
-	if !path.IsAbs(c.BaseDir) {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return err
-		}
-		absHostDir, err := dir.MakeAbs(c.BaseDir, cwd)
-		if err != nil {
-			return err
-		}
-		c.BaseDir = absHostDir
-	}
+	c.SpecifiedBaseDir = len(c.BaseDir) != 0
 
-	canUseNSenterMounter, err := container.CanUseNSenterMounter(c.dockerClient)
+	volumeConfig, err := container.BuildHostVolumesConfig(c.dockerClient, c.BaseDir)
 	if err != nil {
 		return err
 	}
-	log.Infof("canUseNSenterMounter=%t", canUseNSenterMounter)
 
 	// 1. Pull images
 	// 2. Determine cluster IP and additional IP

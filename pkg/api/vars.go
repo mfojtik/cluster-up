@@ -1,5 +1,7 @@
 package api
 
+import "fmt"
+
 var (
 	// MinSupportedDockerVersion is the minimum Docker version we will support to run cluster up
 	MinSupportedDockerVersion = "1.22"
@@ -12,5 +14,22 @@ var (
 	ContainerNameOrigin = "origin"
 
 	// DefaultImagePrefix sets the default prefix for images (like: 'registry.foo.bar/openshift/')
-	DefaultImagePrefix = "openshift/"
+	DefaultImagePrefix = "openshift"
+
+	// OriginImageName is the name of the openshift/origin image
+	OriginImageName = "origin"
+
+	// ImageTag is the image tag to use to run cluster.
+	// This is mutated by CLI --tag argument, the default is what the 'oc' executable version is.
+	ImageTag = "latest"
 )
+
+// TODO: tbd
+func DetermineImageTag() string {
+	return "latest"
+}
+
+// OriginImage returns the openshift/origin image pull spec
+func OriginImage() string {
+	return fmt.Sprintf("%s/%s:%s", DefaultImagePrefix, OriginImageName, ImageTag)
+}
