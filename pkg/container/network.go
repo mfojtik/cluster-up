@@ -124,7 +124,7 @@ func (c *NetworkConfig) build() error {
 	if cmd.Error() != nil {
 		return cmd.Error()
 	}
-	candidates := strings.Split(string(cmd.CombinedOutput()), " ")
+	candidates := strings.Split(string(cmd.Output()), " ")
 	for _, ip := range candidates {
 		if len(strings.TrimSpace(ip)) == 0 {
 			continue

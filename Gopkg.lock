@@ -80,14 +80,8 @@
 [[projects]]
   name = "github.com/russross/blackfriday"
   packages = ["."]
-  revision = "cadec560ec52d93835bf2f15bd794700d3a2473b"
-  version = "v2.0.0"
-
-[[projects]]
-  branch = "master"
-  name = "github.com/shurcooL/sanitized_anchor_name"
-  packages = ["."]
-  revision = "86672fcb3f950f35f2e675df2240550f2a50762f"
+  revision = "55d61fa8aa702f59229e6cff85793c22e580eaf5"
+  version = "v1.5.1"
 
 [[projects]]
   name = "github.com/sirupsen/logrus"
@@ -135,6 +129,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "529b94690dbbd0bdd943021258e42acee48da8baffcec9fabc9d140b13b69cce"
+  inputs-digest = "ee84283d2336e0526cdd74b09327ece2df6b5ad49346a50796accb0224ec1f18"
   solver-name = "gps-cdcl"
   solver-version = 1

@@ -23,19 +23,19 @@ type Client interface {
 	ContainerRemove(containerID string, options types.ContainerRemoveOptions) error
 	ContainerCreate(config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, name string) (container.ContainerCreateCreatedBody, error)
 	ContainerStart(containerID string, options types.ContainerStartOptions) error
-	ContainerWait(containerID string, condition container.WaitCondition) (<-chan container.ContainerWaitOKBody, <-chan error)
+	ContainerWait(containerID string) (int64, error)
 	ContainerAttach(container string, options types.ContainerAttachOptions) (types.HijackedResponse, error)
 	ContainerKill(containerID, signal string) error
 }
 
 func NewDockerClient() (Client, error) {
-	dockerClient, err := client.NewClientWithOpts(client.FromEnv)
+	dockerClient, err := client.NewEnvClient()
 	if err != nil {
 		return nil, log.Error("getting docker client", err)
 	}
-	ctx, cancelFn := context.WithTimeout(context.Background(), defaultTimeout)
-	defer cancelFn()
-	dockerClient.NegotiateAPIVersion(ctx)
+	// ctx, cancelFn := context.WithTimeout(context.Background(), defaultTimeout)
+	//defer cancelFn()
+	//dockerClient.NegotiateAPIVersion(ctx)
 	return &internalDocker{client: dockerClient}, nil
 }
 
@@ -63,8 +63,8 @@ func (d *internalDocker) ContainerStart(containerID string, options types.Contai
 	return d.client.ContainerStart(ctx, containerID, options)
 }
 
-func (d *internalDocker) ContainerWait(containerID string, condition container.WaitCondition) (<-chan container.ContainerWaitOKBody, <-chan error) {
-	return d.client.ContainerWait(context.Background(), containerID, condition)
+func (d *internalDocker) ContainerWait(containerID string) (int64, error) {
+	return d.client.ContainerWait(context.Background(), containerID)
 }
 
 func (d *internalDocker) ContainerCreate(config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, name string) (container.ContainerCreateCreatedBody, error) {

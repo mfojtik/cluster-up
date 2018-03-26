@@ -1,7 +1,6 @@
 package container
 
 import (
-	"bufio"
 	"bytes"
 	"fmt"
 	"io"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/mfojtik/cluster-up/pkg/log"
 )
 
@@ -31,7 +31,8 @@ type Runner interface {
 
 	RunImageWithName(image, name string) Runner
 	Error() error
-	CombinedOutput() []byte
+	Output() []byte
+	ErrorOutput() []byte
 }
 
 type runner struct {
@@ -44,6 +45,7 @@ type runner struct {
 	err            error
 	containerID    string
 	output         []byte
+	outputErr      []byte
 	baseDir        string
 }
 
@@ -121,25 +123,42 @@ func (r *runner) RunImageWithName(image, name string) Runner {
 
 	attachOpts := types.ContainerAttachOptions{
 		Stream: true,
-		Stdin:  false,
 		Stdout: true,
 		Stderr: true,
 	}
 	attachResponse, err := r.client.ContainerAttach(r.containerID, attachOpts)
 	defer attachResponse.Close()
-	attachReader := bufio.NewReader(attachResponse.Reader)
+	actualStdout := new(bytes.Buffer)
+	actualStderr := new(bytes.Buffer)
 	go func() {
-		for {
-			out, err := attachReader.ReadBytes('\n')
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				log.Error("failed to read container logs", err)
-				break
-			}
-			r.output = append(r.output, out...)
+		_, err := stdcopy.StdCopy(actualStdout, actualStderr, attachResponse.Reader)
+		if err != nil {
+			log.Error("reading container output failed: %v", err)
 		}
+		defer func() {
+			for {
+				line, err := actualStdout.ReadBytes('\n')
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					log.Error("failed to read stdout", err)
+					break
+				}
+				r.output = append(r.output, line...)
+			}
+			for {
+				line, err := actualStderr.ReadBytes('\n')
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					log.Error("failed to read stdout", err)
+					break
+				}
+				r.output = append(r.outputErr, line...)
+			}
+		}()
 	}()
 
 	log.Debugf("Starting container %q (%s) entrypoint: %q, command: %q...",
@@ -156,17 +175,15 @@ func (r *runner) RunImageWithName(image, name string) Runner {
 		}
 	}
 	defer r.storeContainerLog(name)
-	waitC, errC := r.client.ContainerWait(response.ID, container.WaitConditionRemoved)
-	select {
-	case err := <-errC:
+	code, err := r.client.ContainerWait(response.ID)
+	if err != nil {
 		r.err = log.Error(fmt.Sprintf("container %q (%q) failed to finish", name, image), err)
-	case status := <-waitC:
-		if status.StatusCode != 0 {
-			r.err = fmt.Errorf("%s\ncontainer %q exited with %d", string(r.CombinedOutput()), name, status.StatusCode)
-		}
-		log.Debugf("Container %q (%s) finished, took %s, returned %d", name, image, time.Since(startTime), status.StatusCode)
-		// TODO: Add timeout
 	}
+	if code != 0 {
+		r.err = fmt.Errorf("%s\ncontainer %q exited with %d", string(r.ErrorOutput()), name, code)
+	}
+	log.Debugf("Container %q (%s) finished, took %s, returned %d", name, image, time.Since(startTime), code)
+	// TODO: Add timeout
 	return r
 }
 
@@ -174,12 +191,12 @@ func (r *runner) Error() error {
 	return r.err
 }
 
-func (r *runner) CombinedOutput() []byte {
-	// Docker snowflake. For some reason the first bytes always contain this garbage,
-	garbagePrefix := []byte{0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x19}
-	filteredOut := bytes.TrimSpace(r.output)
-	filteredOut = bytes.TrimPrefix(filteredOut, garbagePrefix)
-	return filteredOut
+func (r *runner) Output() []byte {
+	return bytes.TrimSpace(r.output)
+}
+
+func (r *runner) ErrorOutput() []byte {
+	return bytes.TrimSpace(r.outputErr)
 }
 
 func (r *runner) storeContainerLog(name string) error {
@@ -193,7 +210,15 @@ func (r *runner) storeContainerLog(name string) error {
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		return err
 	}
-	filename := path.Join(logDir, fmt.Sprintf("%s.log", name))
-	log.Debugf("Writing container log to %q", filename)
-	return ioutil.WriteFile(filename, r.output, 0755)
+	filename := path.Join(logDir, fmt.Sprintf("%s.stdout.log", name))
+	log.Debugf("Storing container %q stdout at %q", name, filename)
+	if err := ioutil.WriteFile(filename, r.output, 0755); err != nil {
+		return err
+	}
+	filename = path.Join(logDir, fmt.Sprintf("%s.stderr.log", name))
+	log.Debugf("Storing container %q stderr at %q", name, filename)
+	if err := ioutil.WriteFile(filename, r.outputErr, 0755); err != nil {
+		return err
+	}
+	return nil
 }
