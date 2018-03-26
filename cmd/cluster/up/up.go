@@ -38,6 +38,7 @@ type ClusterUpOptions struct {
 
 	PublicHostname string
 	RoutingSuffix  string
+	PortForwarding bool
 
 	SkipRegistryCheck bool
 
@@ -46,16 +47,16 @@ type ClusterUpOptions struct {
 	UseExistingConfig bool
 	WriteConfig       bool
 
-	// TODO: Figure out why we need this
-	UsePortForwarding bool
-
 	ServerLogLevel int
 
 	HTTPProxy, HTTPSProxy string
 	NoProxy               []string
 
-	clusterConfig *api.ClusterConfig
-	dockerClient  container.Client
+	dockerClient container.Client
+
+	volumeConfig  *container.VolumesConfig
+	networkConfig *container.NetworkConfig
+	proxyConfig   *container.ProxyConfig
 }
 
 func NewClusterUpCommand(recommendedName, parentName string, out, errOut io.Writer) *cobra.Command {
@@ -93,10 +94,10 @@ func NewClusterUpCommand(recommendedName, parentName string, out, errOut io.Writ
 	flags.BoolVar(&c.SkipRegistryCheck, "skip-registry-check", false, "Skip Docker daemon registry check")
 	flags.StringVar(&c.PublicHostname, "public-hostname", "", "Public hostname for OpenShift cluster")
 	flags.StringVar(&c.RoutingSuffix, "routing-suffix", "", "Default suffix for server routes")
-	flags.BoolVar(&c.UseExistingConfig, "use-existing-config", false, "Use existing configuration if present")
 	flags.StringVar(&c.BaseDir, "base-dir", c.BaseDir, "Directory on Docker host for cluster up configuration")
+	flags.BoolVar(&c.UseExistingConfig, "use-existing-config", false, "Use existing configuration if present")
 	flags.BoolVar(&c.WriteConfig, "write-config", false, "Write the configuration files into host config dir")
-	flags.BoolVar(&c.UsePortForwarding, "forward-ports", c.UsePortForwarding, "Use Docker port-forwarding to communicate with origin container. Requires 'socat' locally.")
+	flags.BoolVar(&c.PortForwarding, "forward-ports", c.PortForwarding, "Use Docker port-forwarding to communicate with origin container. Requires 'socat' locally.")
 	flags.IntVar(&c.ServerLogLevel, "server-loglevel", 3, "Log level for OpenShift server")
 
 	// TODO: Figure out how to externalize these
@@ -123,8 +124,7 @@ func NewClusterUpCommand(recommendedName, parentName string, out, errOut io.Writ
 }
 
 func (c *ClusterUpOptions) Validate() error {
-
-	if err := preflight.NewValidator(c.dockerClient).Validate(); err != nil {
+	if err := preflight.NewValidator(c.dockerClient, c.PortForwarding, c.SkipRegistryCheck).Validate(); err != nil {
 		return err
 	}
 	return nil
@@ -132,16 +132,26 @@ func (c *ClusterUpOptions) Validate() error {
 
 func (c *ClusterUpOptions) Complete() error {
 	c.SpecifiedBaseDir = len(c.BaseDir) != 0
+	var err error
 
-	volumeConfig, err := container.BuildHostVolumesConfig(c.dockerClient, c.BaseDir)
+	c.volumeConfig, err = container.BuildHostVolumesConfig(c.dockerClient, c.BaseDir)
 	if err != nil {
 		return err
 	}
 
-	// 1. Pull images
-	// 2. Determine cluster IP and additional IP
-	// 3. Set the proxy
-	// 4. Setup the volume directories
+	if len(c.HTTPSProxy) > 0 || len(c.HTTPProxy) > 0 {
+		c.proxyConfig = &container.ProxyConfig{
+			HTTPProxy:  c.HTTPProxy,
+			HTTPSProxy: c.HTTPSProxy,
+			NoProxy:    c.NoProxy,
+		}
+	}
+	c.networkConfig, err = container.BuildNetworkConfig(c.dockerClient, c.PublicHostname, c.PortForwarding, c.proxyConfig)
+	if err != nil {
+		return err
+	}
+
+	// TODO: Pull images
 	return nil
 }
 
