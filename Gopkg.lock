@@ -40,6 +40,7 @@
     "api/types/versions",
     "api/types/volume",
     "client",
+    "pkg/stdcopy",
     "pkg/tlsconfig"
   ]
   revision = "092cba3727bb9b4a2f0e922cd6c0f93ea270e363"
@@ -129,6 +130,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "ee84283d2336e0526cdd74b09327ece2df6b5ad49346a50796accb0224ec1f18"
+  inputs-digest = "7e2b7c6373a13b21ee8065236ccb27f1204059a44eb61f91434f923f8db27f82"
   solver-name = "gps-cdcl"
   solver-version = 1
