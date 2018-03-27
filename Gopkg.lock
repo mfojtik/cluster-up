@@ -78,12 +78,6 @@
   revision = "aabc10ec26b754e797f9028f4589c5b7bd90dc20"
 
 [[projects]]
-  branch = "master"
-  name = "github.com/golang/glog"
-  packages = ["."]
-  revision = "23def4e6c14b4da8ac2ed8007337bc5eb5007998"
-
-[[projects]]
   name = "github.com/inconshreveable/mousetrap"
   packages = ["."]
   revision = "76626ae9c91c4f2a10f34cad8ce83ea42c93bb75"
@@ -140,6 +134,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "ee037efc8abaea5dc699107a99ad4ec8e1611cb27e6738da027dabfbfb8d1108"
+  inputs-digest = "323fe27fa2b33fb2c34016df69f61523e2d5168bd74424cf864a49c4c7639a30"
   solver-name = "gps-cdcl"
   solver-version = 1

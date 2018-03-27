@@ -27,7 +27,7 @@ var (
 	RegistryServiceClusterIP = "172.30.1.1"
 )
 
-// TODO: tbd
+// DetermineImageTag determines the latest tag.
 func DetermineImageTag() string {
 	return "latest"
 }

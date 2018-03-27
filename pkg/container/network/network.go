@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golang/glog"
 	"github.com/mfojtik/cluster-up/pkg/api"
 	"github.com/mfojtik/cluster-up/pkg/container"
 	"github.com/mfojtik/cluster-up/pkg/log"
@@ -101,7 +100,7 @@ func (c *NetworkConfig) build() error {
 				c.runDummySocatServer(testContainerName,
 					func(string) error {
 						testHost := "127.0.0.1:8443"
-						err := WaitForSuccessfulDial(false, "tcp", testHost, 200*time.Millisecond, 1*time.Second, 10)
+						err := waitForSuccessfulDial(false, "tcp", testHost, 200*time.Millisecond, 1*time.Second, 10)
 						if err != nil {
 							testDoneChan <- err
 							return nil
@@ -153,7 +152,7 @@ func (c *NetworkConfig) build() error {
 	return nil
 }
 
-func WaitForSuccessfulDial(https bool, network, address string, timeout, interval time.Duration, retries int) error {
+func waitForSuccessfulDial(https bool, network, address string, timeout, interval time.Duration, retries int) error {
 	var (
 		conn net.Conn
 		err  error
@@ -166,7 +165,7 @@ func WaitForSuccessfulDial(https bool, network, address string, timeout, interva
 			conn, err = dialer.Dial(network, address)
 		}
 		if err != nil {
-			glog.V(5).Infof("Got error %#v, trying again: %#v\n", err, address)
+			log.Debugf("Got error %v, trying again %v ...", err, address)
 			time.Sleep(interval)
 			continue
 		}
