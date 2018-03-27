@@ -6,6 +6,8 @@ import (
 
 	"github.com/mfojtik/cluster-up/pkg/api"
 	"github.com/mfojtik/cluster-up/pkg/container"
+	"github.com/mfojtik/cluster-up/pkg/container/network"
+	"github.com/mfojtik/cluster-up/pkg/container/volumes"
 	"github.com/mfojtik/cluster-up/pkg/log"
 	"github.com/mfojtik/cluster-up/pkg/preflight"
 	"github.com/mfojtik/cluster-up/pkg/util/template"
@@ -54,9 +56,9 @@ type ClusterUpOptions struct {
 
 	dockerClient container.Client
 
-	volumeConfig  *container.VolumesConfig
-	networkConfig *container.NetworkConfig
-	proxyConfig   *container.ProxyConfig
+	volumeConfig  *volumes.VolumesConfig
+	networkConfig *network.NetworkConfig
+	proxyConfig   *network.ProxyConfig
 }
 
 func NewClusterUpCommand(recommendedName, parentName string, out, errOut io.Writer) *cobra.Command {
@@ -134,19 +136,19 @@ func (c *ClusterUpOptions) Complete() error {
 	c.SpecifiedBaseDir = len(c.BaseDir) != 0
 	var err error
 
-	c.volumeConfig, err = container.BuildHostVolumesConfig(c.dockerClient, c.BaseDir)
+	c.volumeConfig, err = volumes.BuildHostVolumesConfig(c.dockerClient, c.BaseDir)
 	if err != nil {
 		return err
 	}
 
 	if len(c.HTTPSProxy) > 0 || len(c.HTTPProxy) > 0 {
-		c.proxyConfig = &container.ProxyConfig{
+		c.proxyConfig = &network.ProxyConfig{
 			HTTPProxy:  c.HTTPProxy,
 			HTTPSProxy: c.HTTPSProxy,
 			NoProxy:    c.NoProxy,
 		}
 	}
-	c.networkConfig, err = container.BuildNetworkConfig(c.dockerClient, c.PublicHostname, c.PortForwarding, c.proxyConfig)
+	c.networkConfig, err = network.BuildNetworkConfig(c.dockerClient, c.PublicHostname, c.PortForwarding, c.proxyConfig)
 	if err != nil {
 		return err
 	}

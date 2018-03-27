@@ -1,11 +1,13 @@
-package container
+package volumes
 
 import (
 	"fmt"
 	"os"
 	"path"
+	"regexp"
 
 	"github.com/mfojtik/cluster-up/pkg/api"
+	"github.com/mfojtik/cluster-up/pkg/container"
 	"github.com/mfojtik/cluster-up/pkg/util/dir"
 )
 
@@ -23,11 +25,16 @@ grep -F %[1]s /rootfs/proc/1/mountinfo | grep shared || nsenter --mount=/rootfs/
 
 type VolumesConfig struct {
 	baseDir         string
-	dockerClient    Client
+	dockerClient    container.Client
 	useNSEnterMount bool
 }
 
-func BuildHostVolumesConfig(dockerClient Client, baseDir string) (*VolumesConfig, error) {
+var (
+	fedoraPackage = regexp.MustCompile("\\.fc[0-9_]*\\.")
+	rhelPackage   = regexp.MustCompile("\\.el[0-9_]*\\.")
+)
+
+func BuildHostVolumesConfig(dockerClient container.Client, baseDir string) (*VolumesConfig, error) {
 	c := &VolumesConfig{
 		dockerClient: dockerClient,
 	}
@@ -94,7 +101,7 @@ func (c *VolumesConfig) makeDirectories() error {
 }
 
 func (c *VolumesConfig) ensureSharedHostVolumes() error {
-	return Docker(c.dockerClient, c.BaseDir()).
+	return container.Docker(c.dockerClient, c.BaseDir()).
 		Discard().
 		Privileged().
 		MountRootFS().
@@ -112,7 +119,7 @@ func (c *VolumesConfig) hasNSEnterSupport() (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	cmd := Docker(c.dockerClient, c.BaseDir()).
+	cmd := container.Docker(c.dockerClient, c.BaseDir()).
 		Discard().
 		Privileged().
 		MountRootFS().

@@ -1,18 +1,21 @@
-package container
+package network
 
 import (
+	"crypto/tls"
 	"fmt"
 	"net"
 	"strings"
 	"time"
 
+	"github.com/golang/glog"
 	"github.com/mfojtik/cluster-up/pkg/api"
+	"github.com/mfojtik/cluster-up/pkg/container"
 	"github.com/mfojtik/cluster-up/pkg/log"
 	"github.com/mfojtik/cluster-up/pkg/util/sets"
 )
 
 type NetworkConfig struct {
-	dockerClient Client
+	dockerClient container.Client
 
 	portForwarding bool
 	publicHostname string
@@ -27,7 +30,7 @@ type ProxyConfig struct {
 	NoProxy    []string
 }
 
-func BuildNetworkConfig(dockerClient Client, publicHostname string, portForward bool, proxy *ProxyConfig) (*NetworkConfig, error) {
+func BuildNetworkConfig(dockerClient container.Client, publicHostname string, portForward bool, proxy *ProxyConfig) (*NetworkConfig, error) {
 	c := &NetworkConfig{
 		dockerClient:   dockerClient,
 		publicHostname: publicHostname,
@@ -70,7 +73,7 @@ func (c *NetworkConfig) ProxyConfig() *ProxyConfig {
 
 // Determine if we can use the 127.0.0.1 as server address
 func (c *NetworkConfig) runDummySocatServer(containerName string, testDialFn func(string) error) {
-	Docker(c.dockerClient, "").
+	container.Docker(c.dockerClient, "").
 		Discard().
 		HostNetwork().
 		Privileged().
@@ -127,7 +130,7 @@ func (c *NetworkConfig) build() error {
 		}
 	}
 
-	cmd := Docker(c.dockerClient, "").
+	cmd := container.Docker(c.dockerClient, "").
 		Discard().
 		HostNetwork().
 		Privileged().
@@ -148,4 +151,27 @@ func (c *NetworkConfig) build() error {
 	}
 	log.Debugf("Using %q as additional IPs", strings.Join(c.additionalIPs, ","))
 	return nil
+}
+
+func WaitForSuccessfulDial(https bool, network, address string, timeout, interval time.Duration, retries int) error {
+	var (
+		conn net.Conn
+		err  error
+	)
+	for i := 0; i <= retries; i++ {
+		dialer := net.Dialer{Timeout: timeout}
+		if https {
+			conn, err = tls.DialWithDialer(&dialer, network, address, &tls.Config{InsecureSkipVerify: true})
+		} else {
+			conn, err = dialer.Dial(network, address)
+		}
+		if err != nil {
+			glog.V(5).Infof("Got error %#v, trying again: %#v\n", err, address)
+			time.Sleep(interval)
+			continue
+		}
+		conn.Close()
+		return nil
+	}
+	return err
 }
