@@ -13,12 +13,28 @@ type OpenShiftRunning struct {
 	validatorContext
 }
 
+// List known containers we want to check the existence and remove prior to cluster up
+// operations.
+var containerToCheck = []string{
+	api.ContainerNameOrigin,
+}
+
 func (o *OpenShiftRunning) Message() string {
-	return fmt.Sprintf("Checking if OpenShift %q container is running", api.ContainerNameOrigin)
+	return "Checking for existing OpenShift containers"
 }
 
 func (o *OpenShiftRunning) Validate() error {
-	c, err := o.ContainerClient().ContainerInspect(api.ContainerNameOrigin)
+	for _, name := range containerToCheck {
+		err := o.validateContainerByName(name)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (o *OpenShiftRunning) validateContainerByName(containerName string) error {
+	c, err := o.ContainerClient().ContainerInspect(containerName)
 	if err != nil {
 		if client.IsErrNotFound(err) {
 			return nil
@@ -32,9 +48,9 @@ func (o *OpenShiftRunning) Validate() error {
 			Force: true,
 		})
 		if err != nil {
-			log.Error(fmt.Sprintf("removing %q container failer", api.ContainerNameOrigin), err)
+			log.Error(fmt.Sprintf("removing %q container failed", containerName), err)
 		}
 		return nil
 	}
-	return fmt.Errorf("found existing running container %q", api.ContainerNameOrigin)
+	return fmt.Errorf("found existing running container %q", containerName)
 }

@@ -150,6 +150,7 @@ func (c *ClusterUpOptions) Complete() error {
 	if err != nil {
 		return err
 	}
+	log.Infof("--> Networking configuration: %s", c.networkConfig)
 
 	// TODO: Pull images
 	return nil

@@ -1,6 +1,7 @@
 package container
 
 import (
+	"fmt"
 	"net"
 	"strings"
 	"time"
@@ -47,6 +48,11 @@ func (c *NetworkConfig) AdditionalIPs() []string {
 	return c.additionalIPs
 }
 
+func (c *NetworkConfig) String() string {
+	return fmt.Sprintf("server: %s, additional: %s", c.ServerIP(),
+		strings.Join(c.AdditionalIPs(), ","))
+}
+
 func (c *NetworkConfig) ProxyConfig() *ProxyConfig {
 	values := []string{"127.0.0.1", c.ServerIP(), "localhost", api.RegistryServiceClusterIP}
 	// FIXME: This should move away, external componets should not be able to modify the no_proxy settings
@@ -62,6 +68,18 @@ func (c *NetworkConfig) ProxyConfig() *ProxyConfig {
 	return &newProxyConfig
 }
 
+// Determine if we can use the 127.0.0.1 as server address
+func (c *NetworkConfig) runDummySocatServer(containerName string, testDialFn func(string) error) {
+	NewRunner(c.dockerClient, "").
+		Discard().
+		HostNetwork().
+		Privileged().
+		OnStart(testDialFn).
+		Entrypoint("socat").
+		Command("TCP-LISTEN:8443,crlf,reuseaddr,fork", "SYSTEM:\"echo 'hello world'\"").
+		Run(api.OriginImage(), containerName)
+}
+
 func (c *NetworkConfig) build() error {
 	if c.portForwarding {
 		log.Debugf("Using 127.0.0.1 IP as the host IP, ports will be forwarded")
@@ -71,37 +89,29 @@ func (c *NetworkConfig) build() error {
 			log.Debugf("Using public hostname %s IP %s as the hostIP", c.publicHostname, ip)
 			c.serverIP = ip.String()
 		} else {
-			testDoneChan := make(chan error)
-			testDial := func() error {
-				testHost := "127.0.0.1:8443"
-				err := WaitForSuccessfulDial(false, "tcp", testHost, 200*time.Millisecond, 1*time.Second, 10)
-				if err != nil {
-					testDoneChan <- err
-					return nil
-				}
-				close(testDoneChan)
-				return nil
-			}
+			testDoneChan := make(chan error, 1)
+			serverStopChan := make(chan struct{}, 1)
 			testContainerName := "test-localhost-bind"
 			go func() {
-				// Determine if we can use the 127.0.0.1 as server address
-				cmd := NewRunner(c.dockerClient, "").
-					RemoveWhenExit().
-					HostNetwork().
-					Privileged().
-					AfterStartHook(testDial).
-					Entrypoint("socat").
-					Command("TCP-LISTEN:8443,crlf,reuseaddr,fork", "SYSTEM:\"echo 'hello world'\"").
-					RunImageWithName(api.OriginImage(), testContainerName)
-				if cmd.Error() != nil {
-					log.Error("test localhost bind", cmd.Error())
-				}
+				defer close(serverStopChan)
+				c.runDummySocatServer(testContainerName,
+					func(string) error {
+						testHost := "127.0.0.1:8443"
+						err := WaitForSuccessfulDial(false, "tcp", testHost, 200*time.Millisecond, 1*time.Second, 10)
+						if err != nil {
+							testDoneChan <- err
+							return nil
+						}
+						defer close(testDoneChan)
+						return nil
+					})
 			}()
 			defer func() {
-				err := c.dockerClient.ContainerKill(testContainerName, "TERM")
-				if err != nil {
+				if err := c.dockerClient.ContainerKill(testContainerName, "TERM"); err != nil {
 					log.Error("killing test container", err)
 				}
+				log.Debugf("Waiting for the test server to finish ...")
+				<-serverStopChan
 			}()
 			select {
 			case err := <-testDoneChan:
@@ -110,19 +120,20 @@ func (c *NetworkConfig) build() error {
 				}
 				log.Debugf("Using 127.0.0.1 IP as the host IP")
 				c.serverIP = "127.0.0.1"
-				break
 			case <-time.After(10 * time.Second):
+				return fmt.Errorf("failed to determine the host IP address")
 			}
 		}
 	}
+
 	cmd := NewRunner(c.dockerClient, "").
-		RemoveWhenExit().
+		Discard().
 		HostNetwork().
 		Privileged().
 		Entrypoint("hostname").
-		Command("-I").RunImageWithName(api.OriginImage(), "test-additional-ip")
+		Command("-I").Run(api.OriginImage(), "test-additional-ip")
 	if cmd.Error() != nil {
-		return cmd.Error()
+		return log.Error("test-additional-ip", cmd.Error())
 	}
 	candidates := strings.Split(string(cmd.Output()), " ")
 	for _, ip := range candidates {

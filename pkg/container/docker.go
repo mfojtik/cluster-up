@@ -66,6 +66,9 @@ func (d *internalDocker) negotiateAPIVersion() {
 	}
 }
 
+// The function below implement the Client interface.
+// They provide the default context for all calls.
+
 func (d *internalDocker) ContainerKill(containerID, signal string) error {
 	ctx, cancelFn := context.WithTimeout(context.Background(), defaultTimeout)
 	defer cancelFn()

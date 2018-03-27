@@ -16,21 +16,51 @@ import (
 	"github.com/mfojtik/cluster-up/pkg/log"
 )
 
-type HookFn func() error
+type HookFn func(containerID string) error
 
 type Runner interface {
-	RemoveWhenExit() Runner
-	Privileged() Runner
-	HostPID() Runner
-	HostNetwork() Runner
-	Bind(binds ...string) Runner
-	Entrypoint(cmd ...string) Runner
-	Command(cmd ...string) Runner
-	WithRootFS() Runner
-	AfterStartHook(fn HookFn) Runner
+	// Discard will cause the container to be removed after it exit
+	Discard() Runner
 
-	RunImageWithName(image, name string) Runner
+	// Privileged will make the container privileged
+	Privileged() Runner
+
+	// HostPID will enable the container to see the host PID
+	HostPID() Runner
+
+	// HostNetwork will enable the container to bind on host network interfaces
+	HostNetwork() Runner
+
+	// Binds define the container bind mounts from the host
+	Bind(binds ...string) Runner
+
+	// MountRootFS will bind mount root / into /rootfs inside container
+	MountRootFS() Runner
+
+	// OnBackground disable waiting for the container to finish
+	// If this is set the OnExit hook will panic if used.
+	OnBackground() Runner
+
+	// OnStart allows to execute something after the container was started.
+	OnStart(fn HookFn) Runner
+
+	// OnExit allows to execute something after the container finished.
+	OnExit(fn HookFn) Runner
+
+	// Entrypoint is the container ENTRYPOINT
+	Entrypoint(cmd ...string) Runner
+
+	// Command is the container CMD
+	Command(cmd ...string) Runner
+
+	// Run will run the container based on the provided image and the
+	// container name.
+	Run(image, name string) Runner
+
+	// Error return errors when they occur.
 	Error() error
+
+	// Output and ErrorOutput will return the container stdout and stderr.
 	Output() []byte
 	ErrorOutput() []byte
 }
@@ -41,12 +71,14 @@ type runner struct {
 	hostConfig *container.HostConfig
 	config     *container.Config
 
-	afterStartHook HookFn
-	err            error
-	containerID    string
-	output         []byte
-	outputErr      []byte
-	baseDir        string
+	onStartHooks []HookFn
+	onExitHooks  []HookFn
+	background   bool
+	err          error
+	containerID  string
+	output       []byte
+	outputErr    []byte
+	baseDir      string
 }
 
 func NewRunner(c Client, baseDir string) Runner {
@@ -57,13 +89,35 @@ func NewRunner(c Client, baseDir string) Runner {
 		config:     &container.Config{},
 	}
 }
-func (r *runner) AfterStartHook(fn HookFn) Runner {
-	r.afterStartHook = fn
+
+func (r *runner) OnBackground() Runner {
+	if len(r.onExitHooks) > 0 {
+		panic("cannot run on background with exit hooks defined")
+	}
+	r.background = true
+	return r
+}
+func (r *runner) OnStart(fn HookFn) Runner {
+	r.onStartHooks = append(r.onStartHooks, fn)
 	return r
 }
 
-func (r *runner) RemoveWhenExit() Runner {
+func (r *runner) OnExit(fn HookFn) Runner {
+	if r.background {
+		panic("cannot use OnExit when running container in background")
+	}
+	r.onExitHooks = append(r.onExitHooks, fn)
+	return r
+}
+
+func (r *runner) Discard() Runner {
 	r.hostConfig.AutoRemove = true
+	// TODO: This won't be needed in newer Docker version,
+	// the AutoRemove should automatically remove...
+	r.onExitHooks = append(r.onExitHooks, func(containerID string) error {
+		log.Debugf("Removing container %q", r.containerID)
+		return r.client.ContainerRemove(r.containerID, types.ContainerRemoveOptions{Force: true})
+	})
 	return r
 }
 
@@ -105,85 +159,84 @@ func (r *runner) Command(cmd ...string) Runner {
 	return r
 }
 
-func (r *runner) WithRootFS() Runner {
+func (r *runner) MountRootFS() Runner {
 	r.hostConfig.Binds = append(r.hostConfig.Binds, "/:/rootfs:ro")
 	return r
 }
 
-func (r *runner) RunImageWithName(image, name string) Runner {
+func (r *runner) Run(image, name string) Runner {
+	if len(r.containerID) != 0 {
+		return r
+	}
 	r.config.Image = image
 	response, err := r.client.ContainerCreate(r.config, r.hostConfig, nil, name)
 	if err != nil {
 		r.err = log.Error(fmt.Sprintf("container %q (%q) failed to run", name, image), err)
+		return r
 	}
 	for _, w := range response.Warnings {
-		log.Infof("Container %q produced warning: %s", name, w)
+		log.Debugf("ContainerCreate() %q produced warning: %s", name, w)
 	}
 	r.containerID = response.ID
+	defer r.runHooks(r.onExitHooks, r.containerID)
 
-	attachOpts := types.ContainerAttachOptions{
-		Stream: true,
-		Stdout: true,
-		Stderr: true,
-	}
-	attachResponse, err := r.client.ContainerAttach(r.containerID, attachOpts)
-	defer attachResponse.Close()
-	actualStdout := new(bytes.Buffer)
-	actualStderr := new(bytes.Buffer)
-	go func() {
-		_, err := stdcopy.StdCopy(actualStdout, actualStderr, attachResponse.Reader)
-		if err != nil {
-			log.Error("reading container output failed: %v", err)
+	// If we running container on background,
+	// do not capture the stdout/err as the container will keep running when this
+	// command finish. That will just give us a portion of the logs.
+	if !r.background {
+		attachOpts := types.ContainerAttachOptions{
+			Stream: true,
+			Stdout: true,
+			Stderr: true,
 		}
-		defer func() {
-			for {
-				line, err := actualStdout.ReadBytes('\n')
-				if err == io.EOF {
-					break
-				}
-				if err != nil {
-					log.Error("failed to read stdout", err)
-					break
-				}
-				r.output = append(r.output, line...)
-			}
-			for {
-				line, err := actualStderr.ReadBytes('\n')
-				if err == io.EOF {
-					break
-				}
-				if err != nil {
-					log.Error("failed to read stdout", err)
-					break
-				}
-				r.output = append(r.outputErr, line...)
-			}
-		}()
-	}()
+		attachResponse, err := r.client.ContainerAttach(r.containerID, attachOpts)
+		if err != nil {
+			r.err = log.Error("container attach", err)
+			return r
+		}
+		defer attachResponse.Close()
+		go r.captureContainerOutput(attachResponse.Reader)()
+	}
 
-	log.Debugf("Starting container %q (%s) entrypoint: %q, command: %q...",
-		name, image, strings.Join(r.config.Entrypoint, " "), strings.Join(r.config.Cmd, " "))
+	log.Debugf("Starting container %q (%s) id: %q, remove: %t, entrypoint: %q, "+
+		"command: %q...",
+		name, image, r.containerID, r.hostConfig.AutoRemove,
+		strings.Join(r.config.Entrypoint, " "),
+		strings.Join(r.config.Cmd, " "))
 
 	startTime := time.Now()
 	if err := r.client.ContainerStart(r.containerID, types.ContainerStartOptions{}); err != nil {
 		r.err = log.Error(fmt.Sprintf("failed to start container %q", name), err)
 		return r
 	}
-	if r.afterStartHook != nil {
-		if err := r.afterStartHook(); err != nil {
-			r.err = log.Error("after start hook", err)
+	if !r.background {
+		r.OnExit(r.storeContainerLog)
+	}
+	if r.runHooks(r.onStartHooks, r.containerID); r.Error() != nil {
+		return r
+	}
+	if !r.background {
+		containerWaitChan := make(chan struct{})
+		go func() {
+			defer close(containerWaitChan)
+			code, err := r.client.ContainerWait(r.containerID)
+			if err != nil || code != 0 {
+				if code != 0 {
+					err = fmt.Errorf("non-zero exit code (%d)", code)
+				}
+				r.err = log.Error(fmt.Sprintf("container %q (%q) failed to finish (code %d)", name, image, code), err)
+			}
+		}()
+
+		select {
+		case <-containerWaitChan:
+			log.Debugf("Container %q (%s) finished, took %s", name, image, time.Since(startTime))
+		case <-time.After(1 * time.Minute):
+			r.err = log.Error("container timeout", fmt.Errorf("container %q timeouted", name))
 		}
+		return r
 	}
-	defer r.storeContainerLog(name)
-	code, err := r.client.ContainerWait(response.ID)
-	if err != nil {
-		r.err = log.Error(fmt.Sprintf("container %q (%q) failed to finish", name, image), err)
-	}
-	if code != 0 {
-		r.err = fmt.Errorf("%s\ncontainer %q exited with %d", string(r.ErrorOutput()), name, code)
-	}
-	log.Debugf("Container %q (%s) finished, took %s, returned %d", name, image, time.Since(startTime), code)
-	// TODO: Add timeout
+	log.Debugf("Container %q (%s) will run on background", name, image)
 	return r
 }
 
@@ -192,10 +245,18 @@ func (r *runner) Error() error {
 }
 
 func (r *runner) Output() []byte {
+	if r.background {
+		log.Debugf("Output() called for container that run in background")
+		return nil
+	}
 	return bytes.TrimSpace(r.output)
 }
 
 func (r *runner) ErrorOutput() []byte {
+	if r.background {
+		log.Debugf("ErrorOutput() called for container that run in background")
+		return nil
+	}
 	return bytes.TrimSpace(r.outputErr)
 }
 
@@ -221,4 +282,49 @@ func (r *runner) storeContainerLog(name string) error {
 		return err
 	}
 	return nil
+}
+
+func (r *runner) runHooks(hooks []HookFn, containerID string) {
+	log.Debugf("Running hooks for container %s", containerID)
+	for _, hook := range hooks {
+		if err := hook(containerID); err != nil {
+			r.err = log.Error("hook failed", err)
+			break
+		}
+	}
+}
+
+func (r *runner) captureContainerOutput(reader io.Reader) func() {
+	actualStdout := new(bytes.Buffer)
+	actualStderr := new(bytes.Buffer)
+	return func() {
+		_, err := stdcopy.StdCopy(actualStdout, actualStderr, reader)
+		if err != nil {
+			log.Error("reading container output failed: %v", err)
+		}
+		defer func() {
+			for {
+				line, err := actualStdout.ReadBytes('\n')
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					log.Error("failed to read stdout", err)
+					break
+				}
+				r.output = append(r.output, line...)
+			}
+			for {
+				line, err := actualStderr.ReadBytes('\n')
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					log.Error("failed to read stdout", err)
+					break
+				}
+				r.outputErr = append(r.outputErr, line...)
+			}
+		}()
+	}
 }
