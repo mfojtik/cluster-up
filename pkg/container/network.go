@@ -70,14 +70,15 @@ func (c *NetworkConfig) ProxyConfig() *ProxyConfig {
 
 // Determine if we can use the 127.0.0.1 as server address
 func (c *NetworkConfig) runDummySocatServer(containerName string, testDialFn func(string) error) {
-	NewRunner(c.dockerClient, "").
+	Docker(c.dockerClient, "").
 		Discard().
 		HostNetwork().
 		Privileged().
 		OnStart(testDialFn).
 		Entrypoint("socat").
+		Name(containerName).
 		Command("TCP-LISTEN:8443,crlf,reuseaddr,fork", "SYSTEM:\"echo 'hello world'\"").
-		Run(api.OriginImage(), containerName)
+		Run(api.OriginImage())
 }
 
 func (c *NetworkConfig) build() error {
@@ -126,12 +127,13 @@ func (c *NetworkConfig) build() error {
 		}
 	}
 
-	cmd := NewRunner(c.dockerClient, "").
+	cmd := Docker(c.dockerClient, "").
 		Discard().
 		HostNetwork().
 		Privileged().
 		Entrypoint("hostname").
-		Command("-I").Run(api.OriginImage(), "test-additional-ip")
+		Name("test-additional-ips").
+		Command("-I").Run(api.OriginImage())
 	if cmd.Error() != nil {
 		return log.Error("test-additional-ip", cmd.Error())
 	}

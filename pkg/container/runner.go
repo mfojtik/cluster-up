@@ -22,6 +22,9 @@ type Runner interface {
 	// Discard will cause the container to be removed after it exit
 	Discard() Runner
 
+	// Name sets the container name
+	Name(name string) Runner
+
 	// Privileged will make the container privileged
 	Privileged() Runner
 
@@ -55,7 +58,7 @@ type Runner interface {
 
 	// Run will run the container based on the provided image and the
 	// container name.
-	Run(image, name string) Runner
+	Run(image string) Runner
 
 	// Error return errors when they occur.
 	Error() error
@@ -76,18 +79,24 @@ type runner struct {
 	background   bool
 	err          error
 	containerID  string
+	name         string
 	output       []byte
 	outputErr    []byte
 	baseDir      string
 }
 
-func NewRunner(c Client, baseDir string) Runner {
+func Docker(c Client, baseDir string) Runner {
 	return &runner{
 		client:     c,
 		baseDir:    baseDir,
 		hostConfig: &container.HostConfig{},
 		config:     &container.Config{},
 	}
+}
+
+func (r *runner) Name(name string) Runner {
+	r.name = name
+	return r
 }
 
 func (r *runner) OnBackground() Runner {
@@ -164,18 +173,18 @@ func (r *runner) MountRootFS() Runner {
 	return r
 }
 
-func (r *runner) Run(image, name string) Runner {
+func (r *runner) Run(image string) Runner {
 	if len(r.containerID) != 0 {
 		return r
 	}
 	r.config.Image = image
-	response, err := r.client.ContainerCreate(r.config, r.hostConfig, nil, name)
+	response, err := r.client.ContainerCreate(r.config, r.hostConfig, nil, r.name)
 	if err != nil {
-		r.err = log.Error(fmt.Sprintf("container %q (%q) failed to run", name, image), err)
+		r.err = log.Error(fmt.Sprintf("container %q (%q) failed to run", r.name, image), err)
 		return r
 	}
 	for _, w := range response.Warnings {
-		log.Debugf("ContainerCreate() %q produced warning: %s", name, w)
+		log.Debugf("ContainerCreate() %q produced warning: %s", r.name, w)
 	}
 	r.containerID = response.ID
 	defer r.runHooks(r.onExitHooks, r.containerID)
@@ -195,18 +204,25 @@ func (r *runner) Run(image, name string) Runner {
 			return r
 		}
 		defer attachResponse.Close()
-		go r.captureContainerOutput(attachResponse.Reader)()
+		stopChan := make(chan struct{}, 1)
+
+		// Keep capturing the stdout and stderr until the container exits
+		go r.captureContainerOutput(attachResponse.Reader, stopChan)
+		r.OnExit(func(string) error {
+			close(stopChan)
+			return nil
+		})
 	}
 
 	log.Debugf("Starting container %q (%s) id: %q, remove: %t, entrypoint: %q, "+
 		"command: %q...",
-		name, image, r.containerID, r.hostConfig.AutoRemove,
+		r.name, image, r.containerID, r.hostConfig.AutoRemove,
 		strings.Join(r.config.Entrypoint, " "),
 		strings.Join(r.config.Cmd, " "))
 
 	startTime := time.Now()
 	if err := r.client.ContainerStart(r.containerID, types.ContainerStartOptions{}); err != nil {
-		r.err = log.Error(fmt.Sprintf("failed to start container %q", name), err)
+		r.err = log.Error(fmt.Sprintf("failed to start container %q", r.name), err)
 		return r
 	}
 	if !r.background {
@@ -224,19 +240,19 @@ func (r *runner) Run(image, name string) Runner {
 				if code != 0 {
 					err = fmt.Errorf("non-zero exit code (%d)", code)
 				}
-				r.err = log.Error(fmt.Sprintf("container %q (%q) failed to finish (code %d)", name, image, code), err)
+				r.err = log.Error(fmt.Sprintf("container %q (%q) failed to finish (code %d)", r.name, image, code), err)
 			}
 		}()
 
 		select {
 		case <-containerWaitChan:
-			log.Debugf("Container %q (%s) finished, took %s", name, image, time.Since(startTime))
+			log.Debugf("Container %q (%s) finished, took %s", r.name, image, time.Since(startTime))
 		case <-time.After(1 * time.Minute):
-			r.err = log.Error("container timeout", fmt.Errorf("container %q timeouted", name))
+			r.err = log.Error("container timeout", fmt.Errorf("container %q timeouted", r.name))
 		}
 		return r
 	}
-	log.Debugf("Container %q (%s) will run on background", name, image)
+	log.Debugf("Container %q (%s) will run on background", r.name, image)
 	return r
 }
 
@@ -260,7 +276,7 @@ func (r *runner) ErrorOutput() []byte {
 	return bytes.TrimSpace(r.outputErr)
 }
 
-func (r *runner) storeContainerLog(name string) error {
+func (r *runner) storeContainerLog(string) error {
 	if len(r.baseDir) == 0 {
 		return nil
 	}
@@ -271,13 +287,13 @@ func (r *runner) storeContainerLog(name string) error {
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		return err
 	}
-	filename := path.Join(logDir, fmt.Sprintf("%s.stdout.log", name))
-	log.Debugf("Storing container %q stdout at %q", name, filename)
+	filename := path.Join(logDir, fmt.Sprintf("%s.stdout.log", r.name))
+	log.Debugf("Storing container %q stdout at %q", r.name, filename)
 	if err := ioutil.WriteFile(filename, r.output, 0755); err != nil {
 		return err
 	}
-	filename = path.Join(logDir, fmt.Sprintf("%s.stderr.log", name))
-	log.Debugf("Storing container %q stderr at %q", name, filename)
+	filename = path.Join(logDir, fmt.Sprintf("%s.stderr.log", r.name))
+	log.Debugf("Storing container %q stderr at %q", r.name, filename)
 	if err := ioutil.WriteFile(filename, r.outputErr, 0755); err != nil {
 		return err
 	}
@@ -294,37 +310,38 @@ func (r *runner) runHooks(hooks []HookFn, containerID string) {
 	}
 }
 
-func (r *runner) captureContainerOutput(reader io.Reader) func() {
+func (r *runner) captureContainerOutput(reader io.Reader, stopChan chan struct{}) {
 	actualStdout := new(bytes.Buffer)
 	actualStderr := new(bytes.Buffer)
-	return func() {
-		_, err := stdcopy.StdCopy(actualStdout, actualStderr, reader)
-		if err != nil {
-			log.Error("reading container output failed: %v", err)
-		}
-		defer func() {
-			for {
-				line, err := actualStdout.ReadBytes('\n')
-				if err == io.EOF {
-					break
-				}
-				if err != nil {
-					log.Error("failed to read stdout", err)
-					break
-				}
-				r.output = append(r.output, line...)
-			}
-			for {
-				line, err := actualStderr.ReadBytes('\n')
-				if err == io.EOF {
-					break
-				}
-				if err != nil {
-					log.Error("failed to read stdout", err)
-					break
-				}
-				r.outputErr = append(r.outputErr, line...)
-			}
-		}()
+	_, err := stdcopy.StdCopy(actualStdout, actualStderr, reader)
+	if err != nil {
+		log.Error("reading container output failed: %v", err)
 	}
+	go func() {
+		for {
+			line, err := actualStdout.ReadBytes('\n')
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				log.Error("failed to read stdout", err)
+				break
+			}
+			r.output = append(r.output, line...)
+		}
+	}()
+	go func() {
+		for {
+			line, err := actualStderr.ReadBytes('\n')
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				log.Error("failed to read stdout", err)
+				break
+			}
+			r.outputErr = append(r.outputErr, line...)
+		}
+	}()
+	<-stopChan
 }

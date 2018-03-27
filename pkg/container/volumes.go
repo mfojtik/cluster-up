@@ -94,13 +94,14 @@ func (c *VolumesConfig) makeDirectories() error {
 }
 
 func (c *VolumesConfig) ensureSharedHostVolumes() error {
-	return NewRunner(c.dockerClient, c.BaseDir()).
+	return Docker(c.dockerClient, c.BaseDir()).
 		Discard().
 		Privileged().
 		MountRootFS().
 		Entrypoint("/bin/bash").
 		Command("-c", fmt.Sprintf(ensureVolumeShareCmd, c.HostVolumesDir())).
-		Run(api.OriginImage(), "create-shared-volumes").Error()
+		Name("create-shared-volumes").
+		Run(api.OriginImage()).Error()
 }
 
 func (c *VolumesConfig) hasNSEnterSupport() (bool, error) {
@@ -111,13 +112,14 @@ func (c *VolumesConfig) hasNSEnterSupport() (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	cmd := NewRunner(c.dockerClient, c.BaseDir()).
+	cmd := Docker(c.dockerClient, c.BaseDir()).
 		Discard().
 		Privileged().
 		MountRootFS().
 		Entrypoint("/bin/bash").
 		Command("-c", cmdTestNsenterMount).
-		Run(api.OriginImage(), "test-nsenter-support")
+		Name("test-nsenter-support").
+		Run(api.OriginImage())
 	if cmd.Error() != nil {
 		return false, cmd.Error()
 	}
