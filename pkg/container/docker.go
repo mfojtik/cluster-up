@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	dockerapi "github.com/docker/docker/api"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
@@ -43,6 +44,19 @@ func NewDockerClient() (Client, error) {
 // their own context package...
 type internalDocker struct {
 	client *client.Client
+}
+
+func (d *internalDocker) negotiateAPIVersion() {
+	ctx, cancelFn := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancelFn()
+	p, _ := d.client.Ping(ctx)
+	if p.APIVersion == "" {
+		p.APIVersion = "1.24"
+	}
+	clientVersion := d.client.ClientVersion()
+	if len(clientVersion) == 0 {
+		clientVersion = dockerapi.DefaultVersion
+	}
 }
 
 func (d *internalDocker) ContainerKill(containerID, signal string) error {
