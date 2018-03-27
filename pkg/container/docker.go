@@ -8,6 +8,7 @@ import (
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/versions"
 	"github.com/docker/docker/client"
 
 	"github.com/mfojtik/cluster-up/pkg/log"
@@ -34,10 +35,9 @@ func NewDockerClient() (Client, error) {
 	if err != nil {
 		return nil, log.Error("getting docker client", err)
 	}
-	// ctx, cancelFn := context.WithTimeout(context.Background(), defaultTimeout)
-	//defer cancelFn()
-	//dockerClient.NegotiateAPIVersion(ctx)
-	return &internalDocker{client: dockerClient}, nil
+	internalClient := &internalDocker{client: dockerClient}
+	internalClient.negotiateAPIVersion()
+	return internalClient, nil
 }
 
 // This is nuts, the docker/docker cannot be used as client because they vendor
@@ -46,6 +46,9 @@ type internalDocker struct {
 	client *client.Client
 }
 
+// negotiateAPIVersion is copied from the latest docker code and it allows to use the
+// newer docker client against older docker daemon.
+// TODO: When the docker client is updated, this can be replaced by client.NegotiateAPIVersion()
 func (d *internalDocker) negotiateAPIVersion() {
 	ctx, cancelFn := context.WithTimeout(context.Background(), defaultTimeout)
 	defer cancelFn()
@@ -56,6 +59,10 @@ func (d *internalDocker) negotiateAPIVersion() {
 	clientVersion := d.client.ClientVersion()
 	if len(clientVersion) == 0 {
 		clientVersion = dockerapi.DefaultVersion
+	}
+	// if server version is lower than the client version, downgrade
+	if versions.LessThan(p.APIVersion, clientVersion) {
+		d.client.UpdateClientVersion(p.APIVersion)
 	}
 }
 
